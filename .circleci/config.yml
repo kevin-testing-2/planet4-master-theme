@@ -15,7 +15,7 @@ job-references:
   install_php_dependencies: &install_php_dependencies
     name: Install dependencies
     command: |
-      composer install
+      composer install --optimize-autoloader --no-interaction
       sudo apt-get update
       sudo apt-get install --no-install-recommends -y mariadb-client subversion
 
@@ -31,7 +31,16 @@ job-references:
     steps:
       - checkout
       - run: *setup_environment
+      - restore_cache:
+          keys:
+            - composer-v1-{{ checksum "composer.lock" }}
+            - composer-v1-
       - run: *install_php_dependencies
+      - save_cache:
+          key: composer-v1-{{ checksum "composer.lock" }}
+          paths:
+            - vendor
+            - ~/.composer/cache
       - run:
           name: phpcs
           command: |
@@ -77,23 +86,35 @@ job-references:
 jobs:
   php81-tests:
     <<: *php_job
+    parallelism: 2
     docker:
       - image: cimg/php:8.1
         auth:
           <<: *docker_auth
-      - image: cimg/mysql:5.7
+      - image: cimg/mysql:8.0
         auth:
           <<: *docker_auth
+        environment:
+          MYSQL_ROOT_PASSWORD: rootpw
+          MYSQL_DATABASE: wordpress_test
+          MYSQL_USER: wp_user
+          MYSQL_PASSWORD: wp_pass
 
   php83-tests:
     <<: *php_job
+    parallelism: 2
     docker:
       - image: cimg/php:8.3
         auth:
           <<: *docker_auth
-      - image: cimg/mysql:5.7
+      - image: cimg/mysql:8.0
         auth:
           <<: *docker_auth
+        environment:
+          MYSQL_ROOT_PASSWORD: rootpw
+          MYSQL_DATABASE: wordpress_test
+          MYSQL_USER: wp_user
+          MYSQL_PASSWORD: wp_pass
 
   frontend-tests:
     docker:
@@ -102,7 +123,16 @@ jobs:
           <<: *docker_auth
     steps:
       - checkout
+      - restore_cache:
+          keys:
+            - node-v1-{{ checksum "package-lock.json" }}
+            - node-v1-
       - run: *install_node_dependencies
+      - save_cache:
+          key: node-v1-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+            - ~/.npm
       - run:
           name: Lint CSS
           command: npm run lint:css
@@ -144,8 +174,6 @@ jobs:
   request-instance:
     environment:
       GOOGLE_PROJECT_ID: planet-4-151612
-      CIRCLE_PROJECT_REPONAME: << pipeline.trigger_parameters.github_app.repo_name >>
-      CIRCLE_PULL_REQUEST: << pipeline.event.context.github.pr_url >>
     docker:
       - image: greenpeaceinternational/circleci-base:latest
         auth:
@@ -159,6 +187,8 @@ jobs:
       - run:
           name: Book instance
           command: |
+            # Use CircleCI built-in environment variables
+            export CIRCLE_PROJECT_REPONAME="${CIRCLE_PROJECT_REPONAME:-planet4-master-theme}"
             JIRA_USERNAME=planet4 book-test-instance.py \
             --pr-url $(cat /tmp/workspace/pr) \
             --results /tmp/workspace/booking.json >/tmp/workspace/test-instance
@@ -196,7 +226,7 @@ jobs:
   e2e-tests:
     working_directory: /usr/app/
     docker:
-      - image: mcr.microsoft.com/playwright:v1.49.1
+      - image: mcr.microsoft.com/playwright:v1.49.1-jammy
         auth:
           <<: *docker_auth
     steps:
@@ -275,9 +305,18 @@ jobs:
       - run:
           name: Extract commit message
           command: git log --format=%B -n 1 $CIRCLE_SHA1 > /tmp/workspace/commit-message
+      - restore_cache:
+          keys:
+            - node-v1-{{ checksum "package-lock.json" }}
+            - node-v1-
       - run:
           name: Install npm dependencies
           command: PUPPETEER_SKIP_DOWNLOAD=true PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm ci --legacy-peer-deps
+      - save_cache:
+          key: node-v1-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+            - ~/.npm
       - run:
           name: Build assets
           command: npm run build
