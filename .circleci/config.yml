@@ -385,13 +385,20 @@ jobs:
       - run:
           name: Get merge commit test instance
           command: |
-            instance=$(find-commit-test-instance.py)
-            if [ "$instance" = "False" ] || [ -z "$instance" ]; then
-                echo "No test instance found."
-                circleci-agent step halt
+            # Check if this is a merge commit from a PR by looking for merge patterns
+            if git log --oneline -n 1 | grep -q "Merge pull request\|Merge branch.*into main"; then
+              echo "This appears to be a merge commit, looking for test instance..."
+              instance=$(find-commit-test-instance.py 2>/dev/null || echo "False")
+              if [ "$instance" = "False" ] || [ -z "$instance" ]; then
+                  echo "No test instance found for this merge commit."
+                  circleci-agent step halt
+              fi
+              mkdir -p /tmp/workspace/
+              echo "$instance" >/tmp/workspace/test-instance
+            else
+              echo "This is not a merge commit from a PR, skipping reset-instance job."
+              circleci-agent step halt
             fi
-            mkdir -p /tmp/workspace/
-            echo "$instance" >/tmp/workspace/test-instance
       - run:
           name: Activate gcloud
           command: activate-gcloud-account.sh
@@ -419,7 +426,8 @@ workflow_definitions:
         only: /^v\p{Digit}+\.\p{Digit}+.*/
 
 workflows:
-  branch:
+  # Pull Request workflow - runs for PRs only
+  pr-workflow:
     jobs:
       - php81-tests:
           <<: *on_pr
@@ -430,12 +438,7 @@ workflows:
       - commitlint:
           <<: *on_pr
       - create-zip:
-          context: org-global
-          filters:
-            branches:
-              ignore: main
-            tags:
-              only: /^v\p{Digit}+\.\p{Digit}+.*/
+          <<: *on_pr
       - request-instance:
           <<: *on_pr
           requires:
@@ -466,9 +469,25 @@ workflows:
           <<: *on_pr
           requires:
             - test-user-ready
+
+  # Main branch workflow - runs for pushes to main
+  main-workflow:
+    jobs:
+      - php81-tests:
+          <<: *on_main
+      - php83-tests:
+          <<: *on_main
+      - frontend-tests:
+          <<: *on_main
+      - reset-instance:
+          <<: *on_main
+
+  # Tag workflow - runs for version tags
+  tag-workflow:
+    jobs:
+      - create-zip:
+          <<: *on_tag
       - publish-zip:
           <<: *on_tag
           requires:
             - create-zip
-      - reset-instance:
-          <<: *on_main
